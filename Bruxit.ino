@@ -60,6 +60,12 @@ We are also using the 400 kHz fast I2C mode by setting the TWI_FREQ  to 400000L 
 
 #include "MGP_Teensy32_MPU9250.h"
 
+uint16_t all9df[9];
+
+// IMU hardware addresses
+// distal board has AD0 HI, proximal board has AD0 LO
+uint8_t MPU9250_ADDRESS_DISTAL = MPU9250_ADDRESS_AD0_HI;
+uint8_t MPU9250_ADDRESS_PROXIMAL = MPU9250_ADDRESS_AD0_LO;
 
 
 
@@ -77,27 +83,59 @@ void setup()
 	pinMode(myLed, OUTPUT);
 	digitalWrite(myLed, HIGH);
 
-	MPU9250_ADDRESS = MPU9250_ADDRESS_1;
-
 	I2Cscan();// look for I2C devices on the bus
 
-			  // Read the WHO_AM_I register, this is a good test of communication
-	Serial.println("MPU9250 9-axis motion sensor...");
-	byte c = readByte(MPU9250_ADDRESS, WHO_AM_I_MPU9250);  // Read WHO_AM_I register for MPU-9250
-	Serial.print("MPU9250 "); Serial.print("I AM "); Serial.print(c, HEX); Serial.print(" I should be "); Serial.println(0x71, HEX);
+    // Check distal MPU9250
+	byte DISTAL_IMU_WHOAMI = readByte(MPU9250_ADDRESS_DISTAL, WHO_AM_I_MPU9250); 
+	//Serial.print("MPU9250 "); Serial.print("I AM "); Serial.print(c, HEX); 
+	//Serial.print(" I should be "); Serial.println(0x71, HEX);
+	if (DISTAL_IMU_WHOAMI == 0x71) {
+		Serial.println("Distal IMU responded OK.");
+	}
 
+	// Check distal magnetometer
+	writeByte(MPU9250_ADDRESS_DISTAL, INT_PIN_CFG, 0x12);  // bypass enable 
+	byte DISTAL_MAGNETOMETER_WHOAMI = readByte(AK8963_ADDRESS, AK8963_WHO_AM_I);   
+	writeByte(MPU9250_ADDRESS_DISTAL, INT_PIN_CFG, 0x10);  // bypass disable
+	//Serial.print("AK8963 "); Serial.print("I AM "); Serial.print(d, HEX);
+	//Serial.print(" I should be "); Serial.println(0x48, HEX);
+	if (DISTAL_MAGNETOMETER_WHOAMI == 0x48) {
+		Serial.println("Distal magnetometer responded OK.");
+	}
 
-	if (c == 0x71) // WHO_AM_I should always be 0x68
+	// Check proximal MPU9250
+	byte PROXIMAL_IMU_WHOAMI = readByte(MPU9250_ADDRESS_PROXIMAL, WHO_AM_I_MPU9250);
+	//Serial.print("MPU9250 "); Serial.print("I AM "); Serial.print(c, HEX); 
+	//Serial.print(" I should be "); Serial.println(0x71, HEX);
+	if (PROXIMAL_IMU_WHOAMI == 0x71) {
+		Serial.println("Proximal IMU responded OK.");
+	}
+
+	// Check proximal magnetometer
+	writeByte(MPU9250_ADDRESS_PROXIMAL, INT_PIN_CFG, 0x12);  // bypass enable 
+	byte PROXIMAL_MAGNETOMETER_WHOAMI = readByte(AK8963_ADDRESS, AK8963_WHO_AM_I);
+	writeByte(MPU9250_ADDRESS_PROXIMAL, INT_PIN_CFG, 0x10);  // bypass disable
+														   //Serial.print("AK8963 "); Serial.print("I AM "); Serial.print(d, HEX);
+														   //Serial.print(" I should be "); Serial.println(0x48, HEX);
+	if (PROXIMAL_MAGNETOMETER_WHOAMI == 0x48) {
+		Serial.println("Proximal magnetometer responded OK.");
+	}
+
+	// proceed if IMU and magnetometer chips responded OK
+	if ( (DISTAL_IMU_WHOAMI == 0x71) &&  (PROXIMAL_IMU_WHOAMI == 0x71) &&
+		 (DISTAL_MAGNETOMETER_WHOAMI == 0x48) && (PROXIMAL_MAGNETOMETER_WHOAMI == 0x48))
+		
 	{
-		Serial.println("MPU9250 is online...");
-
-		MPU9250SelfTest(SelfTest); // Start by performing self test and reporting values
-		Serial.print("x-axis self test: acceleration trim within : "); Serial.print(SelfTest[0], 1); Serial.println("% of factory value");
-		Serial.print("y-axis self test: acceleration trim within : "); Serial.print(SelfTest[1], 1); Serial.println("% of factory value");
-		Serial.print("z-axis self test: acceleration trim within : "); Serial.print(SelfTest[2], 1); Serial.println("% of factory value");
-		Serial.print("x-axis self test: gyration trim within : "); Serial.print(SelfTest[3], 1); Serial.println("% of factory value");
-		Serial.print("y-axis self test: gyration trim within : "); Serial.print(SelfTest[4], 1); Serial.println("% of factory value");
-		Serial.print("z-axis self test: gyration trim within : "); Serial.print(SelfTest[5], 1); Serial.println("% of factory value");
+		
+		MPU9250SelfTest(MPU9250_ADDRESS_DISTAL, SelfTest); // Start by performing self test and reporting values
+		Serial.print("Accelerometer calibration errors (%):");
+		Serial.print(SelfTest[0], 1); Serial.print(", ");
+		Serial.print(SelfTest[1], 1); Serial.print(", ");
+		Serial.println(SelfTest[2], 1); 
+		Serial.print("Gyro calibration errors (%):");
+		Serial.print(SelfTest[3], 1); Serial.print(", ");
+		Serial.print(SelfTest[4], 1); Serial.print(", ");
+		Serial.print(SelfTest[5], 1); Serial.println(", ");
 		delay(1000);
 
 		// get sensor resolutions, only need to do this once
@@ -105,25 +143,27 @@ void setup()
 		getGres();
 		getMres();
 
-		Serial.println(" Calibrate gyro and accel");
-		accelgyrocalMPU9250(gyroBias, accelBias); // Calibrate gyro and accelerometers, load biases in bias registers
-		Serial.println("accel biases (mg)"); Serial.println(1000.*accelBias[0]); Serial.println(1000.*accelBias[1]); Serial.println(1000.*accelBias[2]);
-		Serial.println("gyro biases (dps)"); Serial.println(gyroBias[0]); Serial.println(gyroBias[1]); Serial.println(gyroBias[2]);
+		accelgyrocalMPU9250(MPU9250_ADDRESS_DISTAL, gyroBias, accelBias); // Calibrate gyro and accelerometers, load biases in bias registers
+		Serial.print("accelerometer biases (mg): "); 
+		Serial.print(1000.*accelBias[0]); Serial.print(", ");
+		Serial.print(1000.*accelBias[1]); Serial.print(", "); 
+		Serial.println(1000.*accelBias[2]);
+		Serial.print("gyro biases (dps): "); 
+		Serial.print(gyroBias[0]); Serial.print(", "); 
+		Serial.print(gyroBias[1]); Serial.print(", "); 
+		Serial.println(gyroBias[2]);
 
 
 
-		initMPU9250();
-		Serial.println("MPU9250 initialized for active data mode...."); // Initialize device for active mode read of acclerometer, gyroscope, and temperature
-
-																		// Read the WHO_AM_I register of the magnetometer, this is a good test of communication
-		byte d = readByte(AK8963_ADDRESS, AK8963_WHO_AM_I);  // Read WHO_AM_I register for AK8963
-		Serial.print("AK8963 "); Serial.print("I AM "); Serial.print(d, HEX); Serial.print(" I should be "); Serial.println(0x48, HEX);
+		initMPU9250(MPU9250_ADDRESS_DISTAL);
+		Serial.println("Distal IMU initialized OK."); // Initialize device for active mode read of acclerometer, gyroscope, and temperature
 
 
 		// Get magnetometer calibration from AK8963 ROM
-		initAK8963(magCalibration); Serial.println("AK8963 initialized for active data mode...."); // Initialize device for active mode read of magnetometer
+		initAK8963(MPU9250_ADDRESS_DISTAL, magCalibration); 
+		Serial.println("Distal magnetometer initialized."); // Initialize device for active mode read of magnetometer
 
-		magcalMPU9250(magBias, magScale);
+		magcalMPU9250(MPU9250_ADDRESS_DISTAL, magBias, magScale);
 		Serial.println("AK8963 mag biases (mG)"); Serial.println(magBias[0]); Serial.println(magBias[1]); Serial.println(magBias[2]);
 		Serial.println("AK8963 mag scale (mG)"); Serial.println(magScale[0]); Serial.println(magScale[1]); Serial.println(magScale[2]);
 		delay(2000); // add delay to see results before serial spew of data
@@ -142,8 +182,8 @@ void setup()
 	}
 	else
 	{
-		Serial.print("Could not connect to MPU9250: 0x");
-		Serial.println(c, HEX);
+		Serial.print("Could not connect to IMU sensors");
+//		Serial.println(c, HEX);
 		while (1); // Loop forever if communication doesn't happen
 	}
 
@@ -157,7 +197,7 @@ void loop()
 	// If intPin goes high, all data registers have new data
 	//if(newData == true) {  // On interrupt, read data
 	newData = false;  // reset newData flag
-	read_MPU9250_accelgyro(MPU9250_ADDRESS_1, MPU9250Data); // INT cleared on any read
+	readAccelGyro(MPU9250_ADDRESS_DISTAL, MPU9250Data); // INT cleared on any read
 															//   readAccelData(accelCount);  // Read the x/y/z adc values
 
 															// Now we'll calculate the accleration value into actual g's
@@ -172,7 +212,7 @@ void loop()
 	gy = (float)MPU9250Data[5] * gRes;
 	gz = (float)MPU9250Data[6] * gRes;
 
-	readMagData(magCount);  // Read the x/y/z adc values
+	readMag(MPU9250_ADDRESS_DISTAL, magCount);  // Read the x/y/z adc values
 
 							// Calculate the magnetometer values in milliGauss
 							// Include factory calibration per data sheet and user environmental corrections
