@@ -221,7 +221,7 @@ int16_t MPU9250Data[7]; // used to read all 14 bytes at once from the MPU9250 ac
 int16_t accelCount[3];  // Stores the 16-bit signed accelerometer sensor output
 int16_t gyroCount[3];   // Stores the 16-bit signed gyro sensor output
 int16_t magCount[3];    // Stores the 16-bit signed magnetometer sensor output
-float magCalibration[3] = { 0, 0, 0 };  // Factory mag calibration and mag bias
+
 
 int16_t tempCount;            // temperature raw count output
 float   temperature;          // Stores the MPU9250 gyro internal chip temperature in degrees Celsius
@@ -264,17 +264,22 @@ private:
 	uint8_t address;
 
 public:
-	int16_t x[10];  // buffer for 10df data (9+1 to allow for barometer)
-	int16_t * a;    // pointer to accelerometer data in buffer
-	int16_t * g;    // pointer to gyro data
-	int16_t * m;    // pointer to magnetometer data
-	int16_t * b;    // pointer to barometer data
+	int16_t data_buffer[10];  // buffer for 10df data (9+1 to allow for barometer)
+	int16_t * a_buf;    // pointer to raw accelerometer data in buffer
+	int16_t * g_buf;    // pointer to raw gyro data
+	int16_t * m_buf;    // pointer to raw magnetometer data
+	int16_t * b_buf;    // pointer to raw barometer data
+	float x[10];       // calibrated measurements
+	float * a;        // pointer to calibrated accelerometer data
+	float * g;
+	float *m; 
+	float *b;
 
 	float gyroBias[3] = { 0, 0, 0 };
 	float accelBias[3] = { 0, 0, 0 };
 	float magBias[3] = { 0, 0, 0 };
 	float magScale[3] = { 0, 0, 0 };      // Bias corrections for gyro and accelerometer
-
+	float magCalibration[3] = { 0, 0, 0 };  // Factory mag calibration and mag bias
 
 	// constructor
 	// chip has one of two addresses depending on whether AD0 pin is HI or LO
@@ -290,13 +295,18 @@ public:
 	void getAres(void);			//  accelerometer calibration
 	void getGres(void);			// gyro calibration
 	void readAccelGyro(void);	// read accelerometer and gyro  
+	void readCalibratedAccelGyro(void);	// read calibrated accelerometer and gyro data
+	void readCalibratedAccel(void);
+	void readCalibratedGyro(void);
+	void readCalibratedMag(void);
 	void readAccel(void);		// read accelerometer 
 	void readGyro(void);        // read gyro 
 	void readMag(void);         // read magnetometer
-	void read(void);            // read all 9df
+	void readRaw(void);            // read all 9df
+	void readCalibrated(void);
 	int16_t readTemperature(void); // chip temperature
-	void calibrateAccelGyro(void);  // calibrate accelerometer & gyro
-	void calibrateMag(float * dest1, float * dest2);  // calibrate magnetometer
+	void calibrateAccelerometerAndGyro(void);  // calibrate accelerometer & gyro
+	void calibrateMagnetometer(void);  // calibrate magnetometer
 	void selfTest(void);  
 };
 
@@ -307,10 +317,16 @@ MPU9250::MPU9250(uint8_t AD0) {
 	         else address = MPU9250_ADDRESS_AD0_LO;
 
 	//// point to accelerometer, gyro, magnetometer and barometer data in buffer
+	 a_buf = &(data_buffer[0]);
+	 g_buf = &(data_buffer[3]);
+	 m_buf = &(data_buffer[6]);
+	 b_buf = &(data_buffer[9]);  // pointers may be wrong ... b may be in x[0] not x[9]
+
+	 // point to calibrated measurements
 	 a = &(x[0]);
 	 g = &(x[3]);
-	 m = &(x[6]);
-	 b = &(x[9]);  // pointers may be wrong ... b may be in x[0] not x[9]
+	 m = &(x[5]);
+	 b = &(x[9]);
 }
 
 
@@ -435,22 +451,48 @@ void MPU9250::readAccelGyro(void)
 {
 	uint8_t rawData[14];  // x/y/z accel register data stored here
 	readBytes(address, ACCEL_XOUT_H, 12, &rawData[0]);  // Read  12 raw data registers into data array
-	x[0] = ((int16_t)rawData[0] << 8) | rawData[1];  // Turn the MSB and LSB into a signed 16-bit value
-	x[1] = ((int16_t)rawData[2] << 8) | rawData[3];
-	x[2] = ((int16_t)rawData[4] << 8) | rawData[5];
-	x[3] = ((int16_t)rawData[6] << 8) | rawData[7];
-	x[4] = ((int16_t)rawData[8] << 8) | rawData[9];
-	x[5] = ((int16_t)rawData[10] << 8) | rawData[11];
-	x[6] = ((int16_t)rawData[12] << 8) | rawData[13];
+	data_buffer[0] = ((int16_t)rawData[0] << 8) | rawData[1];  // Turn the MSB and LSB into a signed 16-bit value
+	data_buffer[1] = ((int16_t)rawData[2] << 8) | rawData[3];
+	data_buffer[2] = ((int16_t)rawData[4] << 8) | rawData[5];
+	data_buffer[3] = ((int16_t)rawData[6] << 8) | rawData[7];
+	data_buffer[4] = ((int16_t)rawData[8] << 8) | rawData[9];
+	data_buffer[5] = ((int16_t)rawData[10] << 8) | rawData[11];
+	data_buffer[6] = ((int16_t)rawData[12] << 8) | rawData[13];
+}
+
+void MPU9250::readCalibratedAccelGyro(void) {
+
+	readAccelGyro();
+
+	// calibrated acceleration measurements
+	a[0] = (float)data_buffer[0] * aRes - accelBias[0];  // get actual g value, this depends on scale being set
+	a[1] = (float)data_buffer[1] * aRes - accelBias[1];
+	a[2] = (float)data_buffer[2] * aRes - accelBias[2];
+
+	// calibrated gyro measurements
+	g[0] = (float)data_buffer[4] * gRes;  // get actual gyro value, this depends on scale being set
+	g[1] = (float)data_buffer[5] * gRes;
+	g[2] = (float)data_buffer[6] * gRes;
+
 }
 
 void MPU9250::readAccel(void)
 {
 	uint8_t rawData[6];  // x/y/z accel register data stored here
 	readBytes(address, ACCEL_XOUT_H, 6, &rawData[0]);  // Read the six raw data registers into data array
-	*a     = ((int16_t)rawData[0] << 8) | rawData[1];  // Turn the MSB and LSB into a signed 16-bit value
-	*(a+1) = ((int16_t)rawData[2] << 8) | rawData[3];
-	*(a+2) = ((int16_t)rawData[4] << 8) | rawData[5];
+	*a_buf     = ((int16_t)rawData[0] << 8) | rawData[1];  // Turn the MSB and LSB into a signed 16-bit value
+	*(a_buf+1) = ((int16_t)rawData[2] << 8) | rawData[3];
+	*(a_buf+2) = ((int16_t)rawData[4] << 8) | rawData[5];
+}
+
+void MPU9250::readCalibratedAccel(void) {
+
+	readAccel();
+
+	// calibrated acceleration measurements
+	a[0] = (float)data_buffer[0] * aRes - accelBias[0];  
+	a[1] = (float)data_buffer[1] * aRes - accelBias[1];
+	a[2] = (float)data_buffer[2] * aRes - accelBias[2];
 }
 
 
@@ -458,9 +500,19 @@ void MPU9250::readGyro(void)
 {
 	uint8_t rawData[6];  // x/y/z gyro register data stored here
 	readBytes(address, GYRO_XOUT_H, 6, &rawData[0]);  // Read the six raw data registers sequentially into data array
-	*g     = ((int16_t)rawData[0] << 8) | rawData[1];  // Turn the MSB and LSB into a signed 16-bit value
-	*(g+1) = ((int16_t)rawData[2] << 8) | rawData[3];
-	*(g+2) = ((int16_t)rawData[4] << 8) | rawData[5];
+	*g_buf     = ((int16_t)rawData[0] << 8) | rawData[1];  // Turn the MSB and LSB into a signed 16-bit value
+	*(g_buf+1) = ((int16_t)rawData[2] << 8) | rawData[3];
+	*(g_buf+2) = ((int16_t)rawData[4] << 8) | rawData[5];
+}
+
+void MPU9250::readCalibratedGyro(void) {
+	readGyro();
+
+	// calibrated gyro measurements
+	g[0] = (float)data_buffer[4] * gRes;  // get actual gyro value, this depends on scale being set
+	g[1] = (float)data_buffer[5] * gRes;
+	g[2] = (float)data_buffer[6] * gRes;
+
 }
 
 void MPU9250::readMag(void)
@@ -474,9 +526,9 @@ void MPU9250::readMag(void)
 		readBytes(AK8963_ADDRESS, AK8963_XOUT_L, 7, &rawData[0]);  // Read the six raw data and ST2 registers sequentially into data array
 		uint8_t c = rawData[6]; // End data read by reading ST2 register
 		if (!(c & 0x08)) { // Check if magnetic sensor overflow set, if not then report data
-			*m     = ((int16_t)rawData[1] << 8) | rawData[0];  // Turn the MSB and LSB into a signed 16-bit value
-			*(m+1) = ((int16_t)rawData[3] << 8) | rawData[2];  // Data stored as little Endian
-			*(m+2) = ((int16_t)rawData[5] << 8) | rawData[4];
+			*m_buf     = ((int16_t)rawData[1] << 8) | rawData[0];  // Turn the MSB and LSB into a signed 16-bit value
+			*(m_buf+1) = ((int16_t)rawData[3] << 8) | rawData[2];  // Data stored as little Endian
+			*(m_buf+2) = ((int16_t)rawData[5] << 8) | rawData[4];
 		}
 	}
 
@@ -485,11 +537,49 @@ void MPU9250::readMag(void)
 
 }
 
-void MPU9250::read(void)
+void MPU9250::readCalibratedMag(void) {
+
+	readMag();
+	// Calculate the magnetometer values in milliGauss
+	// Include factory calibration per data sheet and user environmental corrections
+	if (newMagData == true) {
+		newMagData = false; // reset newMagData flag
+		m[0] = ((float)m_buf[0] * mRes*magCalibration[0] - magBias[0])*magScale[0];  // get actual magnetometer value, this depends on scale being set
+		m[1] = ((float)m_buf[1] * mRes*magCalibration[1] - magBias[1])*magScale[1];
+		m[2] = ((float)m_buf[2] * mRes*magCalibration[2] - magBias[2])*magScale[2];
+	}
+}
+
+
+
+void MPU9250::readRaw(void)
 // read all 9 df
 {
 	readAccelGyro();
 	readMag();
+}
+
+void MPU9250::readCalibrated(void) {
+
+	readRaw();
+
+	// calibrated acceleration measurements
+	a[0] = (float)data_buffer[0] * aRes - accelBias[0];
+	a[1] = (float)data_buffer[1] * aRes - accelBias[1];
+	a[2] = (float)data_buffer[2] * aRes - accelBias[2];
+
+	// calibrated gyro measurements
+	g[0] = (float)data_buffer[4] * gRes;  // get actual gyro value, this depends on scale being set
+	g[1] = (float)data_buffer[5] * gRes;
+	g[2] = (float)data_buffer[6] * gRes;
+
+	if (newMagData == true) {
+		newMagData = false; // reset newMagData flag
+		m[0] = ((float)m_buf[0] * mRes*magCalibration[0] - magBias[0])*magScale[0];  // get actual magnetometer value, this depends on scale being set
+		m[1] = ((float)m_buf[1] * mRes*magCalibration[1] - magBias[1])*magScale[1];
+		m[2] = ((float)m_buf[2] * mRes*magCalibration[2] - magBias[2])*magScale[2];
+	}
+
 }
 
 int16_t MPU9250::readTemperature(void)
@@ -498,6 +588,9 @@ int16_t MPU9250::readTemperature(void)
 	readBytes(address, TEMP_OUT_H, 2, &rawData[0]);  // Read the two raw data registers sequentially into data array 
 	return ((int16_t)rawData[0] << 8) | rawData[1];  // Turn the MSB and LSB into a 16-bit value
 }
+
+
+
 
 void MPU9250::initAK8963(void)
 {
@@ -510,9 +603,9 @@ void MPU9250::initAK8963(void)
 	writeByte(AK8963_ADDRESS, AK8963_CNTL, 0x0F); // Enter Fuse ROM access mode
 	delay(10);
 	readBytes(AK8963_ADDRESS, AK8963_ASAX, 3, &rawData[0]);  // Read the x-, y-, and z-axis calibration values
-	*m     = (float)(rawData[0] - 128) / 256. + 1.;   // Return x-axis sensitivity adjustment values, etc.
-	*(m+1) = (float)(rawData[1] - 128) / 256. + 1.;
-	*(m+2) = (float)(rawData[2] - 128) / 256. + 1.;
+	magCalibration[0] = (float)(rawData[0] - 128) / 256. + 1.;   // Return x-axis sensitivity adjustment values, etc.
+	magCalibration[1] = (float)(rawData[1] - 128) / 256. + 1.;
+	magCalibration[2] = (float)(rawData[2] - 128) / 256. + 1.;
 	writeByte(AK8963_ADDRESS, AK8963_CNTL, 0x00); // Power down magnetometer  
 	delay(10);
 	// Configure the magnetometer for continuous read and highest resolution
@@ -596,7 +689,7 @@ void  MPU9250::init(void) {
 
 // Function which accumulates gyro and accelerometer data after device initialization. It calculates the average
 // of the at-rest readings and then loads the resulting offsets into accelerometer and gyro bias registers.
-void MPU9250::calibrateAccelGyro(void)
+void MPU9250::calibrateAccelerometerAndGyro(void)
 {
 	uint8_t data[12]; // data array to hold accelerometer and gyro x, y, z, data
 	uint16_t ii, packet_count, fifo_count;
@@ -698,6 +791,11 @@ void MPU9250::calibrateAccelGyro(void)
 	// non-zero values. In addition, bit 0 of the lower byte must be preserved since it is used for temperature
 	// compensation calculations. Accelerometer bias registers expect bias input as 2048 LSB per g, so that
 	// the accelerometer biases calculated above must be divided by 8.
+	// XA_OFFSET is a 15 bit quantity with bits 14:7 in the high byte and 6:0 in the low byte with temperature compensation in bit0
+	// so having got it in a 16 bit short, and having preserved the bottom bit, the number must be shifted right by 1 or divide by 2
+	// to give the correct value for calculations. After calculations it must be shifted left by 1 or multiplied by 2 to get
+	// the bytes correct, then the preserved bit0 can be put back before the bytes are written to registers
+
 
 	int32_t accel_bias_reg[3] = { 0, 0, 0 }; // A place to hold the factory accelerometer trim biases
 	readBytes(address, XA_OFFSET_H, 2, &data[0]); // Read factory accelerometer trim values
@@ -712,33 +810,38 @@ void MPU9250::calibrateAccelGyro(void)
 
 	for (ii = 0; ii < 3; ii++) {
 		if ((accel_bias_reg[ii] & mask)) mask_bit[ii] = 0x01; // If temperature compensation bit is set, record that fact in mask_bit
+		accel_bias_reg[ii] /= 2; //divide accel_bias_reg by 2 to remove the bottom bit and preserve sign
 	}
 
 	// Construct total accelerometer bias, including calculated average accelerometer bias from above
-	accel_bias_reg[0] -= (accel_bias[0] / 8); // Subtract calculated averaged accelerometer bias scaled to 2048 LSB/g (16 g full scale)
-	accel_bias_reg[1] -= (accel_bias[1] / 8);
-	accel_bias_reg[2] -= (accel_bias[2] / 8);
+	for (ii = 0; ii < 3; ii++) {
+		accel_bias_reg[ii] -= (accel_bias[ii] / 8); // Subtract calculated averaged accelerometer bias scaled to 2048 LSB/g (16 g full scale)
+		accel_bias_reg[ii] *= 2;                     //multiply by two to leave the bottom bit clear and but all the bits in the correct bytes
+	}
+
 
 	data[0] = (accel_bias_reg[0] >> 8) & 0xFF;
-	data[1] = (accel_bias_reg[0]) & 0xFF;
+	data[1] = (accel_bias_reg[0]) & 0xFE;   // copy bits 1-7, clear bit 0
 	data[1] = data[1] | mask_bit[0]; // preserve temperature compensation bit when writing back to accelerometer bias registers
 	data[2] = (accel_bias_reg[1] >> 8) & 0xFF;
-	data[3] = (accel_bias_reg[1]) & 0xFF;
+	data[3] = (accel_bias_reg[1]) & 0xFE;
 	data[3] = data[3] | mask_bit[1]; // preserve temperature compensation bit when writing back to accelerometer bias registers
 	data[4] = (accel_bias_reg[2] >> 8) & 0xFF;
-	data[5] = (accel_bias_reg[2]) & 0xFF;
+	data[5] = (accel_bias_reg[2]) & 0xFE;
 	data[5] = data[5] | mask_bit[2]; // preserve temperature compensation bit when writing back to accelerometer bias registers
 
-	// Apparently this is not working for the acceleration biases in the MPU-9250
-	// Are we handling the temperature correction bit properly?
-	// Push accelerometer biases to hardware registers
-	// ***** SEE FIX: https://github.com/kriswiner/MPU-9250/issues/49 //
-	writeByte(MPU9250_ADDRESS, XA_OFFSET_H, data[0]);
-	writeByte(MPU9250_ADDRESS, XA_OFFSET_L, data[1]);
-	writeByte(MPU9250_ADDRESS, YA_OFFSET_H, data[2]);
-	writeByte(MPU9250_ADDRESS, YA_OFFSET_L, data[3]);
-	writeByte(MPU9250_ADDRESS, ZA_OFFSET_H, data[4]);
-	writeByte(MPU9250_ADDRESS, ZA_OFFSET_L, data[5]);
+	// KrisWiner says: 
+		// Apparently this is not working for the acceleration biases in the MPU-9250
+		// Are we handling the temperature correction bit properly?
+	// ... apparently not, see the fix at https://github.com/kriswiner/MPU-9250/issues/49 
+	// This fix has been implemented here
+	// Push accelerometer biases to hardware registers	
+	writeByte(address, XA_OFFSET_H, data[0]);
+	writeByte(address, XA_OFFSET_L, data[1]);
+	writeByte(address, YA_OFFSET_H, data[2]);
+	writeByte(address, YA_OFFSET_L, data[3]);
+	writeByte(address, ZA_OFFSET_H, data[4]);
+	writeByte(address, ZA_OFFSET_L, data[5]);
 									 
 	// Print scaled accelerometer biases for display in the main program
 	Serial.print("accelerometer biases (mg): "); 
@@ -749,14 +852,14 @@ void MPU9250::calibrateAccelGyro(void)
 }
 
 
-void MPU9250::calibrateMag(float * dest1, float * dest2)
+void MPU9250::calibrateMagnetometer(void)
 {
 	uint16_t ii = 0, sample_count = 0;
 	int32_t mag_bias[3] = { 0, 0, 0 }, mag_scale[3] = { 0, 0, 0 };
 	int16_t mag_max[3] = { -32767, -32767, -32767 }, mag_min[3] = { 32767, 32767, 32767 }, mag_temp[3] = { 0, 0, 0 };
 
 	Serial.println("Mag Calibration: Wave device in a figure eight until done!");
-	delay(4000);
+	delay(1000);
 
 	// shoot for ~fifteen seconds of mag data
 	if (Mmode == 0x02) sample_count = 128;  // at 8 Hz ODR, new mag data is available every 125 ms
@@ -764,8 +867,11 @@ void MPU9250::calibrateMag(float * dest1, float * dest2)
 	for (ii = 0; ii < sample_count; ii++) {
 		readMag();  // Read the mag data   
 		for (int jj = 0; jj < 3; jj++) {
-			if (*(m+jj) > mag_max[jj]) mag_max[jj] = *(m+jj);
-			if (*(m + jj) < mag_min[jj]) mag_min[jj] = *(m + jj);
+//			Serial.print(*(m + jj)); Serial.print(", ");
+			if (*(m_buf+jj) > mag_max[jj]) mag_max[jj] = *(m_buf +jj);
+			if (*(m_buf + jj) < mag_min[jj]) mag_min[jj] = *(m_buf + jj);
+			//Serial.print(mag_min[jj]); Serial.print(", ");
+			//Serial.println(mag_max[jj]);
 		}
 		if (Mmode == 0x02) delay(135);  // at 8 Hz ODR, new mag data is available every 125 ms
 		if (Mmode == 0x06) delay(12);  // at 100 Hz ODR, new mag data is available every 10 ms
@@ -780,9 +886,11 @@ void MPU9250::calibrateMag(float * dest1, float * dest2)
 	mag_bias[1] = (mag_max[1] + mag_min[1]) / 2;  // get average y mag bias in counts
 	mag_bias[2] = (mag_max[2] + mag_min[2]) / 2;  // get average z mag bias in counts
 
-	dest1[0] = (float)mag_bias[0] * mRes*magCalibration[0];  // save mag biases in G for main program
-	dest1[1] = (float)mag_bias[1] * mRes*magCalibration[1];
-	dest1[2] = (float)mag_bias[2] * mRes*magCalibration[2];
+	// display
+	Serial.print("Magnetometer bias (mG): "); Serial.print((float)mag_bias[0] * mRes*magCalibration[0]); Serial.print(", ");
+	Serial.print((float)mag_bias[1] * mRes*magCalibration[1]); Serial.print(", ");
+	Serial.println((float)mag_bias[2] * mRes*magCalibration[2]); 
+	Serial.println(mRes); Serial.println(magCalibration[0]);
 
 	// Get soft iron correction estimate
 	mag_scale[0] = (mag_max[0] - mag_min[0]) / 2;  // get average x axis max chord length in counts
@@ -792,9 +900,10 @@ void MPU9250::calibrateMag(float * dest1, float * dest2)
 	float avg_rad = mag_scale[0] + mag_scale[1] + mag_scale[2];
 	avg_rad /= 3.0;
 
-	dest2[0] = avg_rad / ((float)mag_scale[0]);
-	dest2[1] = avg_rad / ((float)mag_scale[1]);
-	dest2[2] = avg_rad / ((float)mag_scale[2]);
+	Serial.print("Magnetometer scale (mG): "); Serial.print(avg_rad / ((float)mag_scale[0])); Serial.print(", ");
+	Serial.print(avg_rad / ((float)mag_scale[1])); Serial.print(", ");
+	Serial.println(avg_rad / ((float)mag_scale[2])); 
+
 
 	Serial.println("Mag Calibration done!");
 }

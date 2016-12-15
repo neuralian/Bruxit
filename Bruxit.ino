@@ -109,50 +109,67 @@ void setup()
 	if (IMU0_isonline  && IMU0_magnetometer_isonline && IMU1_isonline  && IMU1_magnetometer_isonline)
 	{
 
+		IMU0.selfTest(); // test and report calibrations
 		IMU1.selfTest(); // test and report calibrations
 
 		delay(1000);
 
 		// get sensor resolutions, only need to do this once
+		IMU0.getAres();
+		IMU0.getGres();
+		IMU0.getMres();
+
 		IMU1.getAres();
 		IMU1.getGres();
 		IMU1.getMres();
 
-		IMU1.calibrateAccelGyro(); // Calibrate gyro and accelerometers, load biases in bias registers
-		//Serial.print("accelerometer biases (mg): ");
-		//Serial.print(1000.*accelBias[0]); Serial.print(", ");
-		//Serial.print(1000.*accelBias[1]); Serial.print(", ");
-		//Serial.println(1000.*accelBias[2]);
-		//Serial.print("gyro biases (dps): ");
-		//Serial.print(gyroBias[0]); Serial.print(", ");
-		//Serial.print(gyroBias[1]); Serial.print(", ");
-		//Serial.println(gyroBias[2]);
+		IMU0.calibrateAccelerometerAndGyro(); // Calibrate gyro and accelerometers, load biases in bias registers
+		IMU1.calibrateAccelerometerAndGyro(); // Calibrate gyro and accelerometers, load biases in bias registers
 
-
-
+		IMU0.initMPU9250();
+		Serial.println("Proximal IMU initialized OK."); // Initialize device for active mode read of acclerometer, gyroscope, and temperature
 		IMU1.initMPU9250();
 		Serial.println("Distal IMU initialized OK."); // Initialize device for active mode read of acclerometer, gyroscope, and temperature
 
 
 													  // Get magnetometer calibration from AK8963 ROM
+		IMU0.initAK8963();
+		Serial.println("Proximal magnetometer initialized."); // Initialize device for active mode read of magnetometer
 		IMU1.initAK8963();
 		Serial.println("Distal magnetometer initialized."); // Initialize device for active mode read of magnetometer
 
-		//IMU1.calibrateMag(magBias, magScale);
+		IMU0.calibrateMagnetometer();
 		//Serial.println("AK8963 mag biases (mG)"); Serial.println(magBias[0]); Serial.println(magBias[1]); Serial.println(magBias[2]);
 		//Serial.println("AK8963 mag scale (mG)"); Serial.println(magScale[0]); Serial.println(magScale[1]); Serial.println(magScale[2]);
 		//delay(2000); // add delay to see results before serial spew of data
 
 		if (SerialDebug) {
 			//  Serial.println("Calibration values: ");
-			Serial.print("X-Axis sensitivity adjustment value "); Serial.println(magCalibration[0], 2);
-			Serial.print("Y-Axis sensitivity adjustment value "); Serial.println(magCalibration[1], 2);
-			Serial.print("Z-Axis sensitivity adjustment value "); Serial.println(magCalibration[2], 2);
+			Serial.print("X-Axis sensitivity adjustment value "); Serial.println(IMU0.magCalibration[0], 2);
+			Serial.print("Y-Axis sensitivity adjustment value "); Serial.println(IMU0.magCalibration[1], 2);
+			Serial.print("Z-Axis sensitivity adjustment value "); Serial.println(IMU0.magCalibration[2], 2);
 		}
 
+		IMU1.calibrateMagnetometer();
+		//Serial.println("AK8963 mag biases (mG)"); Serial.println(magBias[0]); Serial.println(magBias[1]); Serial.println(magBias[2]);
+		//Serial.println("AK8963 mag scale (mG)"); Serial.println(magScale[0]); Serial.println(magScale[1]); Serial.println(magScale[2]);
+		//delay(2000); // add delay to see results before serial spew of data
 
+		if (SerialDebug) {
+			//  Serial.println("Calibration values: ");
+			Serial.print("X-Axis sensitivity adjustment value "); Serial.println(IMU1.magCalibration[0], 2);
+			Serial.print("Y-Axis sensitivity adjustment value "); Serial.println(IMU1.magCalibration[1], 2);
+			Serial.print("Z-Axis sensitivity adjustment value "); Serial.println(IMU1.magCalibration[2], 2);
+		}
 
 		attachInterrupt(intPin, myinthandler, RISING);  // define interrupt for INT pin output of MPU9250
+
+		//Serial.println(aRes);
+		//Serial.println(gRes);
+		//Serial.println(mRes);
+		//Serial.println("===============");
+		//delay(5000);
+
 
 	}
 	else
@@ -167,40 +184,15 @@ void setup()
 
 void loop()
 {
-	/*
+	
 	//	Serial.println("hello!");
 	// If intPin goes high, all data registers have new data
 	//if(newData == true) {  // On interrupt, read data
 	newData = false;  // reset newData flag
-	readAccelGyro(MPU9250_ADDRESS_DISTAL, MPU9250Data); // INT cleared on any read
-	//   readAccelData(accelCount);  // Read the x/y/z adc values
+	IMU0.readRaw(); // INT cleared on any read
+	IMU1.readRaw(); // INT cleared on any read
 
-	// Now we'll calculate the accleration value into actual g's
-	ax = (float)MPU9250Data[0] * aRes - accelBias[0];  // get actual g value, this depends on scale being set
-	ay = (float)MPU9250Data[1] * aRes - accelBias[1];
-	az = (float)MPU9250Data[2] * aRes - accelBias[2];
 
-	//   readGyroData(gyroCount);  // Read the x/y/z adc values
-
-	// Calculate the gyro value into actual degrees per second
-	gx = (float)MPU9250Data[4] * gRes;  // get actual gyro value, this depends on scale being set
-	gy = (float)MPU9250Data[5] * gRes;
-	gz = (float)MPU9250Data[6] * gRes;
-
-	readMag(MPU9250_ADDRESS_DISTAL, magCount);  // Read the x/y/z adc values
-
-	// Calculate the magnetometer values in milliGauss
-	// Include factory calibration per data sheet and user environmental corrections
-	if (newMagData == true) {
-	newMagData = false; // reset newMagData flag
-	mx = (float)magCount[0] * mRes*magCalibration[0] - magBias[0];  // get actual magnetometer value, this depends on scale being set
-	my = (float)magCount[1] * mRes*magCalibration[1] - magBias[1];
-	mz = (float)magCount[2] * mRes*magCalibration[2] - magBias[2];
-	mx *= magScale[0];
-	my *= magScale[1];
-	mz *= magScale[2];
-	}
-	//}
 
 	Now = micros();
 	deltat = ((Now - lastUpdate) / 1000000.0f); // set integration time by time elapsed since last filter update
@@ -223,24 +215,47 @@ void loop()
 
 	// Serial print and/or display at 0.5 s rate independent of data rates
 	delt_t = millis() - count;
-	if (delt_t > 200) { // update 100Hz
+	if (delt_t > 10) { // update 100Hz
 
 	if (SerialDebug) {
-	// print xyz acceleration
-	Serial.print((int)1000 * ax); Serial.print(", ");
-	Serial.print((int)1000 * ay); Serial.print(", ");
-	Serial.print((int)1000 * az); Serial.print(", ");
 
-	// print xyz gyro
-	Serial.print(gx, 2); Serial.print(", ");
-	Serial.print(gy, 2); Serial.print(", ");
-	Serial.print(gz, 2); Serial.print(", ");
+	Serial.print(millis()); 	Serial.print(", ");
+
+	//// print xyz acceleration in mG
+	//Serial.print(1000 * IMU0.a[0]); Serial.print(", ");
+	//Serial.print(1000 * IMU0.a[1]); Serial.print(", ");
+	//Serial.print(1000 * IMU0.a[2]); Serial.print(", ");
+
+	////// print xyz gyro
+	//Serial.print(IMU0.g[0], 2); Serial.print(", ");
+	//Serial.print(IMU0.g[1], 2); Serial.print(", ");
+	//Serial.print(IMU0.g[2], 2); Serial.print(", ");
 
 	// print xyz magnetic
-	Serial.print((int)mx); Serial.print(", ");
-	Serial.print((int)my); Serial.print(", ");
-	Serial.println((int)mz);
-	//
+	Serial.print(IMU0.m_buf[0]);
+	Serial.print(", ");
+	Serial.print(IMU0.m_buf[1]); Serial.print(", ");
+	Serial.print(IMU0.m_buf[2]);
+
+	Serial.print(", ");
+
+	//// print xyz acceleration in mG
+	//Serial.print(1000 * IMU1.a[0]); Serial.print(", ");
+	//Serial.print(1000 * IMU1.a[1]); Serial.print(", ");
+	//Serial.print(1000 * IMU1.a[2]); Serial.print(", ");
+
+	////// print xyz gyro
+	//Serial.print(IMU1.g[0], 2); Serial.print(", ");
+	//Serial.print(IMU1.g[1], 2); Serial.print(", ");
+	//Serial.print(IMU1.g[2], 2); Serial.print(", ");
+
+	//// print xyz magnetic
+	Serial.print(IMU1.m_buf[0]); Serial.print(", ");
+	Serial.print(IMU1.m_buf[1]); Serial.print(", ");
+	Serial.print(IMU1.m_buf[2]);
+
+	Serial.println("");
+
 	//Serial.print("q0 = "); Serial.print(q[0]);
 	//Serial.print(" qx = "); Serial.print(q[1]);
 	//Serial.print(" qy = "); Serial.print(q[2]);
@@ -329,5 +344,5 @@ void loop()
 	sumCount = 0;
 	sum = 0;
 	}
-	*/
+
 }
